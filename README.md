@@ -1,16 +1,44 @@
 # easy-qfnu-xk-monitor
 
-曲阜师范大学 (QFNU) 统一身份认证 (CAS) 登录的 Go 语言实现。
+曲阜师范大学（QFNU）选课监控工具。  
+程序通过 CAS 登录教务系统，自动获取选课轮次并轮询课程搜索接口，发现新增课程后通过 OneBot HTTP 推送到 QQ 群。
 
-## 如何使用
+## 功能特性
 
-本项目提供了灵活的配置方式，支持命令行参数、环境变量和 `.env` 配置文件。
+- CAS 登录与会话维持
+- 选课轮次 DOM 解析（`#tbKxkc`）
+- 五个选课模块统一搜索与去重
+- 课程新增检测与首轮基线策略
+- 快照持久化（`data/last_result.json`）
+- 会话失效自动重登与重试
+- OneBot 群消息广播推送
 
-### 1. 准备工作
+## 项目结构
 
-首先，确保你已经安装了 Go 语言环境。
+```text
+easy-qfnu-xk-monitor/
+├── main.go
+├── .env.example
+├── docs/
+├── cmd/demo/
+└── pkg/
+    ├── auth/      # CAS 密码加密
+    ├── cas/       # CAS 登录
+    ├── config/    # 配置加载与校验
+    ├── jwxt/      # 轮次获取与课程搜索
+    ├── monitor/   # 轮询监控与快照管理
+    └── notify/    # OneBot 推送
+```
 
-克隆仓库并下载依赖：
+## 环境要求
+
+- Go 1.25+
+- 可访问 QFNU 教务系统
+- 已运行的 OneBot HTTP 服务
+
+## 快速开始
+
+### 1. 安装依赖
 
 ```bash
 git clone https://github.com/W1ndys/easy-qfnu-xk-monitor.git
@@ -18,66 +46,62 @@ cd easy-qfnu-xk-monitor
 go mod download
 ```
 
-### 2. 运行方式
+### 2. 配置环境变量
 
-你可以直接运行源码来测试登录功能。
-
-#### 方式一：命令行参数（推荐）
-
-直接通过 `-u` 指定账号，`-p` 指定密码：
+复制并编辑 `.env`：
 
 ```bash
-go run . -u <你的学号> -p <你的密码>
+cp .env.example .env
 ```
 
-#### 方式二：.env 配置文件
+`.env` 关键项：
 
-在项目根目录下创建一个名为 `.env` 的文件，填入以下内容：
+- `QFNU_USERNAME`: 学号/工号
+- `QFNU_PASSWORD`: 登录密码
+- `ONEBOT_URL`: OneBot HTTP 地址（例如 `http://127.0.0.1:3000`）
+- `ONEBOT_TOKEN`: OneBot Token（可选）
+- `GROUP_LIST`: 推送群号，逗号分隔
+- `COURSE_LIST`: 监控课程号，逗号分隔
+- `POLL_INTERVAL`: 轮询间隔秒数（默认 2）
 
-```env
-QFNU_USERNAME=你的学号
-QFNU_PASSWORD=你的密码
-```
-
-然后直接运行，程序会自动读取配置：
+### 3. 运行主程序
 
 ```bash
 go run .
 ```
 
-#### 方式三：环境变量
+可选参数：
 
-你也可以设置系统环境变量 `QFNU_USERNAME` 和 `QFNU_PASSWORD`，然后直接运行 `go run .`。
+- `-t`: 请求超时（默认 `30s`）
 
-## 如何编译
-
-如果你希望生成可执行文件以便分发或部署，可以使用以下命令进行编译。
-
-### 编译主程序
-
-在项目根目录下执行：
+## 编译
 
 ```bash
-# 默认编译，生成的文件名取决于目录名（如 easy-qfnu-xk-monitor）
 go build -v .
-
-# 或者指定输出文件名
-# Windows
-go build -o qfnu-login.exe .
-# Linux/macOS
-go build -o qfnu-login .
 ```
 
-编译完成后，即可直接运行生成的可执行文件：
+可执行文件示例：
+
+- Windows: `go build -o easy-qfnu-xk-monitor.exe .`
+- Linux/macOS: `go build -o easy-qfnu-xk-monitor .`
+
+## Demo（仅登录示例）
+
+`cmd/demo` 仍可用于 CAS 登录连通性测试：
 
 ```bash
-./qfnu-login -u <学号> -p <密码>
+go run ./cmd/demo -u <学号> -p <密码>
 ```
 
-### 编译 Demo
+## 文档
 
-如果你想编译 `cmd/demo` 下的示例程序：
+- `docs/qfnu-cas-login-api.md`: CAS 登录协议说明
+- `docs/选课API.md`: 五模块搜索与选课接口
+- `docs/获取选课轮次.md`: 轮次页面解析说明
+- `docs/选课监控开发方案.md`: 整体设计与实现规划
 
-```bash
-go build -v ./cmd/demo
-```
+## 注意事项
+
+- 本项目会高频请求教务系统，请合理设置 `POLL_INTERVAL`。
+- `data/` 目录为运行时数据目录，已在 `.gitignore` 中忽略。
+- 仅用于学习与个人自动化场景，请遵守学校与平台使用规范。
