@@ -99,18 +99,27 @@ if ($LASTEXITCODE -ne 0) {
 # 4. 使用 Tar + SSH 上传二进制文件
 Write-Host "[-] 正在上传二进制文件..." -ForegroundColor Cyan
 
-# 构造上传命令：
-# 1. 本地 tar 打包二进制文件
-# 2. SSH 传输
-# 3. 远程 tar 解压
-# 4. 远程 chmod +x 赋予执行权限
-$uploadCmdString = "tar -c $BinaryName | ssh -i `"$IdentityFile`" -p $Port -o StrictHostKeyChecking=no $User@$Server `"tar -x -C $RemotePath && chmod +x $RemotePath/$BinaryName`""
+# 上传逻辑：
+# 1. 本地 tar -cf - 将归档输出到 stdout（避免默认写入 tape 设备）
+# 2. 通过 SSH 管道传输
+# 3. 远程 tar -xf - 解压到目标目录，并赋予可执行权限
+$remoteExtractCmd = "tar -xf - -C '$RemotePath' && chmod +x '$RemotePath/$BinaryName'"
 
 Write-Host "Executing: Upload..." -ForegroundColor DarkGray
-Invoke-Expression $uploadCmdString
+tar -cf - -- $BinaryName | ssh -i "$IdentityFile" -p $Port -o StrictHostKeyChecking=no "$User@$Server" $remoteExtractCmd
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host "[+] 文件上传成功!" -ForegroundColor Green
+
+    # 上传完成后清理本地构建产物，避免工作目录堆积历史二进制
+    if (Test-Path $BinaryName) {
+        try {
+            Remove-Item -LiteralPath $BinaryName -Force
+            Write-Host "[-] 已删除本地构建文件: $BinaryName" -ForegroundColor Green
+        } catch {
+            Write-Warning "上传成功，但删除本地构建文件失败: $BinaryName，错误: $($_.Exception.Message)"
+        }
+    }
 } else {
     Write-Error "文件上传失败。"
 }
