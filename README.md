@@ -1,4 +1,4 @@
-# qfnu-cas-go
+# easy-qfnu-xk-monitor
 
 曲阜师范大学 (QFNU) 统一身份认证 (CAS) 登录的 Go 语言实现。
 
@@ -13,8 +13,8 @@
 克隆仓库并下载依赖：
 
 ```bash
-git clone https://github.com/W1ndys/qfnu-cas-go.git
-cd qfnu-cas-go
+git clone https://github.com/W1ndys/easy-qfnu-xk-monitor.git
+cd easy-qfnu-xk-monitor
 go mod download
 ```
 
@@ -58,7 +58,7 @@ go run .
 在项目根目录下执行：
 
 ```bash
-# 默认编译，生成的文件名取决于目录名（如 qfnu-cas-go）
+# 默认编译，生成的文件名取决于目录名（如 easy-qfnu-xk-monitor）
 go build -v .
 
 # 或者指定输出文件名
