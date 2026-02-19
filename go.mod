@@ -1,4 +1,4 @@
-module github.com/W1ndys/qfnu-cas-go
+module github.com/W1ndys/easy-qfnu-xk-monitor
 
 go 1.25.6
 

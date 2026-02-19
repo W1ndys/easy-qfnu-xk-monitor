@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/W1ndys/qfnu-cas-go/pkg/jwxt"
+	"github.com/W1ndys/easy-qfnu-xk-monitor/pkg/jwxt"
 )
 
 type sendGroupMsgRequest struct {

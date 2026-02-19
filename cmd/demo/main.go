@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/W1ndys/qfnu-cas-go/pkg/cas"
+	"github.com/W1ndys/easy-qfnu-xk-monitor/pkg/cas"
 )
 
 func main() {

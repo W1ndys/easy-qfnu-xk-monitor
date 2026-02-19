@@ -12,10 +12,10 @@ import (
 	"sort"
 	"time"
 
-	"github.com/W1ndys/qfnu-cas-go/pkg/cas"
-	"github.com/W1ndys/qfnu-cas-go/pkg/config"
-	"github.com/W1ndys/qfnu-cas-go/pkg/jwxt"
-	"github.com/W1ndys/qfnu-cas-go/pkg/notify"
+	"github.com/W1ndys/easy-qfnu-xk-monitor/pkg/cas"
+	"github.com/W1ndys/easy-qfnu-xk-monitor/pkg/config"
+	"github.com/W1ndys/easy-qfnu-xk-monitor/pkg/jwxt"
+	"github.com/W1ndys/easy-qfnu-xk-monitor/pkg/notify"
 )
 
 const (

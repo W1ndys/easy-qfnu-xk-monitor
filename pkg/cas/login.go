@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/W1ndys/qfnu-cas-go/pkg/auth"
+	"github.com/W1ndys/easy-qfnu-xk-monitor/pkg/auth"
 )
 
 const (
