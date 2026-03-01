@@ -1,8 +1,10 @@
 # custom ignores
 node_modules/
 data/
+logs/
 build/
 .gocache
+.gomodcache
 
 # Tailwind CSS Standalone CLI (all platforms)
 web/tailwindcss

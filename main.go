@@ -12,12 +12,17 @@ import (
 	"github.com/W1ndys/easy-qfnu-xk-monitor/pkg/cas"
 	"github.com/W1ndys/easy-qfnu-xk-monitor/pkg/config"
 	"github.com/W1ndys/easy-qfnu-xk-monitor/pkg/jwxt"
+	"github.com/W1ndys/easy-qfnu-xk-monitor/pkg/logger"
 	"github.com/W1ndys/easy-qfnu-xk-monitor/pkg/monitor"
 	"github.com/W1ndys/easy-qfnu-xk-monitor/pkg/notify"
 )
 
 func main() {
-	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+	cleanupLogger, err := logger.Init()
+	if err != nil {
+		log.Fatalf("[ERROR] 初始化日志器失败: %v", err)
+	}
+	defer cleanupLogger()
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -27,8 +32,8 @@ func main() {
 	timeout := flag.Duration("t", 30*time.Second, "请求超时时间")
 	flag.Parse()
 
-	log.Printf("[INFO] 启动配置: username=%s onebot=%s groups=%d courses=%d poll_interval=%ds",
-		cfg.Username, cfg.OneBotURL, len(cfg.GroupList), len(cfg.CourseList), cfg.PollInterval)
+	log.Printf("[INFO] 启动配置: username=%s onebot=%s groups=%d courses=%d",
+		cfg.Username, cfg.OneBotURL, len(cfg.GroupList), len(cfg.CourseList))
 
 	casClient, err := cas.NewClient(cas.WithTimeout(*timeout))
 	if err != nil {
