@@ -1,7 +1,7 @@
 # easy-qfnu-xk-monitor
 
 曲阜师范大学（QFNU）选课监控工具。  
-程序通过 CAS 登录教务系统，自动获取选课轮次并轮询课程搜索接口，发现新增课程后通过 OneBot HTTP 推送到 QQ 群。
+程序通过 CAS 登录教务系统，自动获取选课轮次并执行一次课程搜索，发现新增课程后通过 OneBot HTTP 推送到 QQ 群。建议由外部计划任务控制执行间隔。
 
 ## 功能特性
 
@@ -12,6 +12,7 @@
 - 快照持久化（`data/last_result.json`）
 - 会话失效自动重登与重试
 - OneBot 群消息广播推送
+- Logrus 日志输出（控制台 + 按天日志文件）
 
 ## 项目结构
 
@@ -26,7 +27,7 @@ easy-qfnu-xk-monitor/
     ├── cas/       # CAS 登录
     ├── config/    # 配置加载与校验
     ├── jwxt/      # 轮次获取与课程搜索
-    ├── monitor/   # 轮询监控与快照管理
+    ├── monitor/   # 单次监控与快照管理
     └── notify/    # OneBot 推送
 ```
 
@@ -62,7 +63,9 @@ cp .env.example .env
 - `ONEBOT_TOKEN`: OneBot Token（可选）
 - `GROUP_LIST`: 推送群号，逗号分隔
 - `COURSE_LIST`: 监控课程号，逗号分隔
-- `POLL_INTERVAL`: 轮询间隔秒数（默认 2）
+- `POLL_INTERVAL`: 已弃用（当前版本为单次执行模式）
+- `LOG_DIR`: 日志目录（可选，默认 `logs`）
+- `LOG_MAX_AGE_DAYS`: 日志保留天数（可选，默认 `30`）
 
 ### 3. 运行主程序
 
@@ -102,6 +105,7 @@ go run ./cmd/demo -u <学号> -p <密码>
 
 ## 注意事项
 
-- 本项目会高频请求教务系统，请合理设置 `POLL_INTERVAL`。
+- 建议使用外部计划任务（如 Windows 任务计划程序、cron）控制执行频率。
+- 日志按天写入 `logs/monitor-YYYY-MM-DD.log`。
 - `data/` 目录为运行时数据目录，已在 `.gitignore` 中忽略。
 - 仅用于学习与个人自动化场景，请遵守学校与平台使用规范。
