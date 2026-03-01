@@ -14,7 +14,7 @@
 
 param(
     # 服务器地址
-    [string]$Server = "my.server",
+    [string]$Server = "mylinux",
 
     # SSH 端口
     [int]$Port = 22,
