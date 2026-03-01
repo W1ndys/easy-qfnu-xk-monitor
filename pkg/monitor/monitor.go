@@ -175,6 +175,10 @@ func (m *Monitor) reloginWithRetry(ctx context.Context) error {
 		if err := m.casClient.Login(ctx, m.config.Username, m.config.Password); err != nil {
 			log.Printf("[ERROR] 重新登录失败: %v", err)
 		} else {
+			// 重新登录成功后保存 session
+			if err := m.casClient.SaveSession(); err != nil {
+				log.Printf("[WARN] 保存 session 失败: %v", err)
+			}
 			roundID, err := jwxt.GetSelectionRoundID(ctx, m.casClient.GetClient())
 			if err != nil {
 				log.Printf("[ERROR] 重新获取轮次失败: %v", err)
