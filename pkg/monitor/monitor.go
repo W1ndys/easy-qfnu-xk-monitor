@@ -66,23 +66,19 @@ func New(casClient *cas.Client, cfg *config.Config, notifier *notify.Notifier) (
 	return m, nil
 }
 
-// Run 启动监控循环，直到 context 被取消。
+// Run 执行单轮监控并返回。
 func (m *Monitor) Run(ctx context.Context) error {
-	log.Printf("[INFO] 监控启动: 轮询间隔=%ds, 课程关键词=%d", m.config.PollInterval, len(m.config.CourseList))
-	m.runRound(ctx)
-
-	ticker := time.NewTicker(time.Duration(m.config.PollInterval) * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			log.Printf("[INFO] 监控停止: %v", ctx.Err())
-			return nil
-		case <-ticker.C:
-			m.runRound(ctx)
-		}
+	select {
+	case <-ctx.Done():
+		log.Printf("[INFO] 监控取消: %v", ctx.Err())
+		return nil
+	default:
 	}
+
+	log.Printf("[INFO] 监控启动: 单次执行模式, 课程关键词=%d", len(m.config.CourseList))
+	m.runRound(ctx)
+	log.Printf("[INFO] 监控结束: 单次执行完成")
+	return nil
 }
 
 func (m *Monitor) runRound(ctx context.Context) {
