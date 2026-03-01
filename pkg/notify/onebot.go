@@ -120,6 +120,7 @@ func FormatCoursesMessage(courses []jwxt.CourseInfo) string {
 		b.WriteString(fmt.Sprintf("开课单位：%s\n", nonEmpty(course.Dwmc, "未知")))
 	}
 	b.WriteString("━━━━━━━━━━━━━━━━")
+	b.WriteString("选课当天有事冲突需要帮抢可找他->1087476180")
 
 	return b.String()
 }
