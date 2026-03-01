@@ -45,11 +45,18 @@ func main() {
 
 	log.Printf("[INFO] 正在登录教务系统: %s", cfg.Username)
 	startTime := time.Now()
-	if err := casClient.Login(ctx, cfg.Username, cfg.Password); err != nil {
+	if err := casClient.LoginWithCache(ctx, cfg.Username, cfg.Password); err != nil {
 		log.Fatalf("[ERROR] 登录失败: %v", err)
 	}
 	duration := time.Since(startTime)
 	log.Printf("[INFO] 登录成功, 耗时=%s", duration)
+
+	// 程序退出前保存最新的 session 状态
+	defer func() {
+		if err := casClient.SaveSession(); err != nil {
+			log.Printf("[WARN] 退出时保存 session 失败: %v", err)
+		}
+	}()
 
 	roundID, err := jwxt.GetSelectionRoundID(ctx, casClient.GetClient())
 	if err != nil {

@@ -2,7 +2,6 @@ package cas
 
 import (
 	"net/http"
-	"net/http/cookiejar"
 	"time"
 )
 
@@ -42,8 +41,8 @@ func NewClient(opts ...ClientOption) (*Client, error) {
 		opt(options)
 	}
 
-	// 初始化 CookieJar
-	jar, err := cookiejar.New(nil)
+	// 初始化可持久化的 CookieJar
+	jar, err := NewPersistentJar()
 	if err != nil {
 		return nil, err
 	}
@@ -75,4 +74,13 @@ func (c *Client) GetClient() *http.Client {
 // Do 发送 HTTP 请求 (代理方法)
 func (c *Client) Do(req *http.Request) (*http.Response, error) {
 	return c.httpClient.Do(req)
+}
+
+// ResetJar 重置为一个干净的 PersistentJar，丢弃所有旧 Cookie
+func (c *Client) ResetJar() {
+	jar, err := NewPersistentJar()
+	if err != nil {
+		return
+	}
+	c.httpClient.Jar = jar
 }

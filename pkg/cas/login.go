@@ -25,6 +25,59 @@ const (
 	URLSuccessMark = "教学一体化服务平台" // 登录成功的页面标识
 )
 
+// ValidateSession 验证当前 Cookie 是否仍然有效
+// 通过访问教务系统主页并检测响应页面是否包含 URLSuccessMark 来判断
+func (c *Client) ValidateSession(ctx context.Context) bool {
+	req, err := http.NewRequestWithContext(ctx, "GET", URLMainPage, nil)
+	if err != nil {
+		return false
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return false
+	}
+
+	return strings.Contains(string(bodyBytes), URLSuccessMark)
+}
+
+// LoginWithCache 优先使用缓存的 session 登录，失败后回退到完整登录流程
+func (c *Client) LoginWithCache(ctx context.Context, username, password string) error {
+	// 1. 尝试加载本地 session
+	if c.LoadSession() {
+		log.Println("[INFO] 正在验证缓存的会话...")
+		if c.ValidateSession(ctx) {
+			log.Println("[INFO] 缓存会话有效，跳过登录流程")
+			return nil
+		}
+		log.Println("[INFO] 缓存会话已失效，执行完整登录流程")
+		// 重置为干净的 jar，避免旧 Cookie 干扰新的登录流程
+		c.ResetJar()
+	}
+
+	// 2. 执行完整登录
+	if err := c.Login(ctx, username, password); err != nil {
+		return err
+	}
+
+	// 3. 登录成功后保存 session
+	if err := c.SaveSession(); err != nil {
+		log.Printf("[WARN] 保存 session 失败: %v", err)
+	}
+
+	return nil
+}
+
 // Login 执行完整的 CAS 登录流程
 func (c *Client) Login(ctx context.Context, username, password string) error {
 	// 0. 检查是否需要验证码
