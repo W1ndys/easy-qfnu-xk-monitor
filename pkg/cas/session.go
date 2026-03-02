@@ -1,7 +1,8 @@
 package cas
 
 import (
-	"encoding/json"
+	"bytes"
+	"encoding/gob"
 	"fmt"
 	"log"
 	"net/http"
@@ -14,7 +15,7 @@ import (
 )
 
 const (
-	defaultSessionPath = "data/session.json"
+	defaultSessionPath = "data/session.gob"
 )
 
 // PersistentJar 包装标准 CookieJar，自动追踪所有设置过 Cookie 的完整 URL，
@@ -53,16 +54,26 @@ func (p *PersistentJar) Cookies(u *url.URL) []*http.Cookie {
 	return p.jar.Cookies(u)
 }
 
-// SerializedCookie 用于 JSON 序列化的 Cookie 结构
-type SerializedCookie struct {
-	Name  string `json:"name"`
-	Value string `json:"value"`
+// gobCookie 用于 gob 序列化的 Cookie 结构，保存完整属性
+type gobCookie struct {
+	Name     string
+	Value    string
+	Path     string
+	Domain   string
+	Secure   bool
+	HttpOnly bool
 }
 
-// SessionStore 保存完整的 session 信息
-type SessionStore struct {
-	SavedAt time.Time                     `json:"saved_at"`
-	Cookies map[string][]SerializedCookie `json:"cookies"`
+// gobEntry 按完整 URL 分组的 Cookie 条目
+type gobEntry struct {
+	URL     string // 完整 URL（含路径），如 http://zhjw.qfnu.edu.cn/jsxsd/
+	Cookies []gobCookie
+}
+
+// gobSessionStore gob 序列化的 session 完整结构
+type gobSessionStore struct {
+	SavedAt time.Time
+	Entries []gobEntry
 }
 
 // SaveSession 将整个 session（CookieJar 中所有已知 URL 的 Cookie）序列化保存到文件
@@ -72,11 +83,6 @@ func (c *Client) SaveSession() error {
 		return fmt.Errorf("当前 CookieJar 不支持序列化")
 	}
 
-	store := SessionStore{
-		SavedAt: time.Now(),
-		Cookies: make(map[string][]SerializedCookie),
-	}
-
 	pj.mu.RLock()
 	urls := make([]string, 0, len(pj.urls))
 	for u := range pj.urls {
@@ -84,9 +90,13 @@ func (c *Client) SaveSession() error {
 	}
 	pj.mu.RUnlock()
 
-	// 用每个完整 URL 去查询 Cookie，确保不同路径层级的 Cookie 都能取到
-	// 使用 seen 去重（同一个 Cookie 可能被多个 URL 查到）
-	type cookieKey struct{ urlStr, name string }
+	store := gobSessionStore{
+		SavedAt: time.Now(),
+	}
+
+	// 按完整 URL 分组保存，不做 origin 归并，保留路径信息
+	// 使用 seen 对 (url, name) 去重，避免子路径查询到父路径 Cookie 导致重复
+	type cookieKey struct{ url, name string }
 	seen := make(map[cookieKey]struct{})
 
 	for _, rawURL := range urls {
@@ -99,25 +109,28 @@ func (c *Client) SaveSession() error {
 			continue
 		}
 
-		origin := fmt.Sprintf("%s://%s", u.Scheme, u.Host)
-		if store.Cookies[origin] == nil {
-			store.Cookies[origin] = make([]SerializedCookie, 0)
-		}
-
-		for _, c := range cookies {
-			key := cookieKey{origin, c.Name}
+		entry := gobEntry{URL: rawURL}
+		for _, ck := range cookies {
+			key := cookieKey{rawURL, ck.Name}
 			if _, dup := seen[key]; dup {
 				continue
 			}
 			seen[key] = struct{}{}
-			store.Cookies[origin] = append(store.Cookies[origin], SerializedCookie{
-				Name:  c.Name,
-				Value: c.Value,
+			entry.Cookies = append(entry.Cookies, gobCookie{
+				Name:     ck.Name,
+				Value:    ck.Value,
+				Path:     ck.Path,
+				Domain:   ck.Domain,
+				Secure:   ck.Secure,
+				HttpOnly: ck.HttpOnly,
 			})
+		}
+		if len(entry.Cookies) > 0 {
+			store.Entries = append(store.Entries, entry)
 		}
 	}
 
-	if len(store.Cookies) == 0 {
+	if len(store.Entries) == 0 {
 		return fmt.Errorf("session 为空，无需保存")
 	}
 
@@ -126,13 +139,13 @@ func (c *Client) SaveSession() error {
 		return fmt.Errorf("创建 session 目录失败: %w", err)
 	}
 
-	content, err := json.MarshalIndent(store, "", "  ")
-	if err != nil {
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(store); err != nil {
 		return fmt.Errorf("序列化 session 失败: %w", err)
 	}
 
 	tmpPath := defaultSessionPath + ".tmp"
-	if err := os.WriteFile(tmpPath, content, 0o644); err != nil {
+	if err := os.WriteFile(tmpPath, buf.Bytes(), 0o644); err != nil {
 		return fmt.Errorf("写入临时 session 文件失败: %w", err)
 	}
 
@@ -144,11 +157,12 @@ func (c *Client) SaveSession() error {
 		}
 	}
 
-	total := 0
-	for _, cs := range store.Cookies {
-		total += len(cs)
+	totalCookies := 0
+	urlCount := len(store.Entries)
+	for _, e := range store.Entries {
+		totalCookies += len(e.Cookies)
 	}
-	log.Printf("[INFO] Session 已保存到: %s (共 %d 个域名, %d 个 Cookie)", defaultSessionPath, len(store.Cookies), total)
+	log.Printf("[INFO] Session 已保存到: %s (共 %d 个 URL, %d 个 Cookie)", defaultSessionPath, urlCount, totalCookies)
 	return nil
 }
 
@@ -163,13 +177,13 @@ func (c *Client) LoadSession() bool {
 		return false
 	}
 
-	var store SessionStore
-	if err := json.Unmarshal(content, &store); err != nil {
+	var store gobSessionStore
+	if err := gob.NewDecoder(bytes.NewReader(content)).Decode(&store); err != nil {
 		log.Printf("[WARN] 解析 session 文件失败: %v", err)
 		return false
 	}
 
-	if len(store.Cookies) == 0 {
+	if len(store.Entries) == 0 {
 		return false
 	}
 
@@ -180,16 +194,20 @@ func (c *Client) LoadSession() bool {
 	}
 
 	loaded := 0
-	for origin, serialized := range store.Cookies {
-		u, err := url.Parse(origin)
+	for _, entry := range store.Entries {
+		u, err := url.Parse(entry.URL)
 		if err != nil {
 			continue
 		}
-		cookies := make([]*http.Cookie, 0, len(serialized))
-		for _, sc := range serialized {
+		cookies := make([]*http.Cookie, 0, len(entry.Cookies))
+		for _, gc := range entry.Cookies {
 			cookies = append(cookies, &http.Cookie{
-				Name:  sc.Name,
-				Value: sc.Value,
+				Name:     gc.Name,
+				Value:    gc.Value,
+				Path:     gc.Path,
+				Domain:   gc.Domain,
+				Secure:   gc.Secure,
+				HttpOnly: gc.HttpOnly,
 			})
 		}
 		pj.SetCookies(u, cookies)
@@ -197,8 +215,8 @@ func (c *Client) LoadSession() bool {
 	}
 
 	c.httpClient.Jar = pj
-	log.Printf("[INFO] 已从文件加载 session: %d 个域名, %d 个 Cookie (保存于 %s)",
-		len(store.Cookies), loaded, store.SavedAt.Format("2006-01-02 15:04:05"))
+	log.Printf("[INFO] 已从文件加载 session: %d 个 URL, %d 个 Cookie (保存于 %s)",
+		len(store.Entries), loaded, store.SavedAt.Format("2006-01-02 15:04:05"))
 	return true
 }
 
