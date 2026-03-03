@@ -42,7 +42,7 @@ func NewClient(opts ...ClientOption) (*Client, error) {
 	}
 
 	// 初始化可持久化的 CookieJar
-	jar, err := NewPersistentJar()
+	jar, err := newPersistentJar()
 	if err != nil {
 		return nil, err
 	}
@@ -76,9 +76,11 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 	return c.httpClient.Do(req)
 }
 
-// ResetJar 重置为一个干净的 PersistentJar，丢弃所有旧 Cookie
+// ResetJar 重置为一个干净的 CookieJar，丢弃所有旧 Cookie。
+// 先清除持久化文件，再创建全新的 jar。
 func (c *Client) ResetJar() {
-	jar, err := NewPersistentJar()
+	ClearSession()
+	jar, err := newPersistentJar()
 	if err != nil {
 		return
 	}
