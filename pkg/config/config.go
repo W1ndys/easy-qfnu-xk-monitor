@@ -22,6 +22,7 @@ type Config struct {
 	GroupList    []string
 	CourseList   []string
 	PollInterval int
+	OCRApiURL    string // 验证码识别 API 地址
 }
 
 // Load 从环境变量和 .env 文件加载配置并完成校验。
@@ -36,6 +37,7 @@ func Load() (*Config, error) {
 		GroupList:    splitAndTrim(os.Getenv("GROUP_LIST")),
 		CourseList:   splitAndTrim(os.Getenv("COURSE_LIST")),
 		PollInterval: DefaultPollInterval,
+		OCRApiURL:    strings.TrimRight(strings.TrimSpace(os.Getenv("OCR_API_URL")), "/"),
 	}
 
 	if raw := strings.TrimSpace(os.Getenv("POLL_INTERVAL")); raw != "" {
@@ -62,6 +64,9 @@ func Load() (*Config, error) {
 	}
 	if len(cfg.CourseList) == 0 {
 		missing = append(missing, "COURSE_LIST")
+	}
+	if cfg.OCRApiURL == "" {
+		missing = append(missing, "OCR_API_URL")
 	}
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("缺少必填配置项: %s", strings.Join(missing, ", "))
