@@ -1,73 +1,27 @@
 package auth
 
 import (
-	"bytes"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
 	"encoding/base64"
-	"fmt"
-	"math/big"
 )
 
-const (
-	aesChars    = "ABCDEFGHJKMNPQRSTWXYZabcdefhijkmnprstwxyz2345678"
-	aesCharsLen = len(aesChars)
-)
-
-// EncryptPassword 使用 QFNU CAS 特定的 AES/CBC/PKCS7 算法加密密码
-// password: 明文密码
-// salt: 从登录页面获取的动态盐
-func EncryptPassword(password, salt string) (string, error) {
-	// 1. 生成64位随机前缀和16位随机IV
-	prefix, err := randomString(64)
-	if err != nil {
-		return "", fmt.Errorf("生成随机前缀失败: %w", err)
-	}
-	iv, err := randomString(16)
-	if err != nil {
-		return "", fmt.Errorf("生成随机IV失败: %w", err)
-	}
-
-	// 2. 组合数据
-	dataToEncrypt := []byte(prefix + password)
-	key := []byte(salt)
-	ivBytes := []byte(iv)
-
-	// 3. 创建 AES 加密器
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return "", fmt.Errorf("创建 AES Cipher 失败: %w", err)
-	}
-
-	// 4. PKCS7 填充
-	paddedData := pkcs7Pad(dataToEncrypt, aes.BlockSize)
-
-	// 5. CBC 模式加密
-	mode := cipher.NewCBCEncrypter(block, ivBytes)
-	encryptedData := make([]byte, len(paddedData))
-	mode.CryptBlocks(encryptedData, paddedData)
-
-	// 6. Base64 编码
-	return base64.StdEncoding.EncodeToString(encryptedData), nil
+// EncodeBase64 对字符串进行 Base64 编码
+func EncodeBase64(data string) string {
+	return base64.StdEncoding.EncodeToString([]byte(data))
 }
 
-// randomString 生成指定长度的随机字符串
-func randomString(length int) (string, error) {
-	b := make([]byte, length)
-	for i := range b {
-		n, err := rand.Int(rand.Reader, big.NewInt(int64(aesCharsLen)))
-		if err != nil {
-			return "", err
-		}
-		b[i] = aesChars[n.Int64()]
+// DecodeBase64 对 Base64 字符串进行解码
+func DecodeBase64(data string) (string, error) {
+	decoded, err := base64.StdEncoding.DecodeString(data)
+	if err != nil {
+		return "", err
 	}
-	return string(b), nil
+	return string(decoded), nil
 }
 
-// pkcs7Pad 对数据进行 PKCS7 填充
-func pkcs7Pad(data []byte, blockSize int) []byte {
-	padding := blockSize - len(data)%blockSize
-	padText := bytes.Repeat([]byte{byte(padding)}, padding)
-	return append(data, padText...)
+// GenerateEncoded 生成强智教务系统登录所需的 encoded 字符串
+// 格式: Base64(用户名) + "%%%" + Base64(密码)
+func GenerateEncoded(username, password string) string {
+	usernameBase64 := EncodeBase64(username)
+	passwordBase64 := EncodeBase64(password)
+	return usernameBase64 + "%%%" + passwordBase64
 }
