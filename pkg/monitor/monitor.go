@@ -28,6 +28,7 @@ type Monitor struct {
 	client       *http.Client
 	config       *config.Config
 	notifier     *notify.Notifier
+	ocrClient    cas.OCRClient
 	lastResult   map[string]jwxt.CourseInfo
 	hasBaseline  bool
 	snapshotPath string
@@ -45,11 +46,15 @@ func New(casClient *cas.Client, cfg *config.Config, notifier *notify.Notifier) (
 		return nil, fmt.Errorf("notifier 不能为空")
 	}
 
+	// 创建 OCR 客户端
+	ocrClient := cas.NewDefaultOCRClient(cfg.OCRApiURL)
+
 	m := &Monitor{
 		casClient:    casClient,
 		client:       casClient.GetClient(),
 		config:       cfg,
 		notifier:     notifier,
+		ocrClient:    ocrClient,
 		lastResult:   make(map[string]jwxt.CourseInfo),
 		snapshotPath: defaultSnapshotPath,
 	}
@@ -172,7 +177,7 @@ func (m *Monitor) reloginWithRetry(ctx context.Context) error {
 		}
 
 		log.Printf("[INFO] 会话恢复第 %d 次尝试", attempt)
-		if err := m.casClient.Login(ctx, m.config.Username, m.config.Password); err != nil {
+		if err := m.casClient.Login(ctx, m.config.Username, m.config.Password, m.ocrClient); err != nil {
 			log.Printf("[ERROR] 重新登录失败: %v", err)
 		} else {
 			// 重新登录成功后保存 session

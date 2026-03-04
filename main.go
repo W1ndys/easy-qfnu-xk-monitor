@@ -32,8 +32,8 @@ func main() {
 	timeout := flag.Duration("t", 30*time.Second, "请求超时时间")
 	flag.Parse()
 
-	log.Printf("[INFO] 启动配置: username=%s onebot=%s groups=%d courses=%d",
-		cfg.Username, cfg.OneBotURL, len(cfg.GroupList), len(cfg.CourseList))
+	log.Printf("[INFO] 启动配置: username=%s onebot=%s groups=%d courses=%d ocr_api=%s",
+		cfg.Username, cfg.OneBotURL, len(cfg.GroupList), len(cfg.CourseList), cfg.OCRApiURL)
 
 	casClient, err := cas.NewClient(cas.WithTimeout(*timeout))
 	if err != nil {
@@ -43,9 +43,12 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// 创建 OCR 客户端
+	ocrClient := cas.NewDefaultOCRClient(cfg.OCRApiURL)
+
 	log.Printf("[INFO] 正在登录教务系统: %s", cfg.Username)
 	startTime := time.Now()
-	if err := casClient.LoginWithCache(ctx, cfg.Username, cfg.Password); err != nil {
+	if err := casClient.LoginWithCache(ctx, cfg.Username, cfg.Password, ocrClient); err != nil {
 		log.Fatalf("[ERROR] 登录失败: %v", err)
 	}
 	duration := time.Since(startTime)
