@@ -1,7 +1,9 @@
 package cas
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,24 +13,120 @@ import (
 	"net/url"
 	"strings"
 	"time"
-
-	"github.com/PuerkitoBio/goquery"
-	"github.com/W1ndys/easy-qfnu-xk-monitor/pkg/auth"
 )
 
 const (
-	// URL 常量
-	URLService  = "http://zhjw.qfnu.edu.cn/sso.jsp"
-	URLLogin    = "http://ids.qfnu.edu.cn/authserver/login"
-	URLMainPage = "http://zhjw.qfnu.edu.cn/jsxsd/framework/xsMain.jsp"
-	// URLMainPage = "http://zhjw.qfnu.edu.cn/jsxsd/framework/jsMain.jsp" // 教师端请使用这个
-	URLSuccessMark = "教学一体化服务平台" // 登录成功的页面标识
+	// 强智教务系统 URL 常量
+	BaseURL      = "http://zhjw.qfnu.edu.cn/jsxsd/"
+	IndexURL     = "http://zhjw.qfnu.edu.cn/jsxsd/"
+	CaptchaURL   = "http://zhjw.qfnu.edu.cn/jsxsd/verifycode.servlet"
+	LoginURL     = "http://zhjw.qfnu.edu.cn/jsxsd/xk/LoginToXkLdap"
+	MainPageURL  = "http://zhjw.qfnu.edu.cn/jsxsd/framework/xsMain.jsp"
+	SuccessMark  = "教学一体化服务平台" // 登录成功的页面标识
+
+	// 验证码最大重试次数
+	MaxCaptchaRetries = 3
 )
 
+// OCRClient 定义验证码识别客户端接口
+type OCRClient interface {
+	Recognize(imageData []byte) (string, error)
+}
+
+// DefaultOCRClient 默认的 OCR 客户端，调用外部 ddddocr API
+type DefaultOCRClient struct {
+	apiURL string
+}
+
+// NewDefaultOCRClient 创建默认 OCR 客户端
+func NewDefaultOCRClient(apiURL string) *DefaultOCRClient {
+	return &DefaultOCRClient{apiURL: apiURL}
+}
+
+// Recognize 调用 OCR API 识别验证码
+func (c *DefaultOCRClient) Recognize(imageData []byte) (string, error) {
+	// 将图片转为 base64
+	imageBase64 := base64.StdEncoding.EncodeToString(imageData)
+
+	// 构建请求体
+	reqBody := map[string]string{
+		"image": imageBase64,
+	}
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("构建请求体失败: %w", err)
+	}
+
+	// 发送请求到 OCR API
+	req, err := http.NewRequest("POST", c.apiURL+"/ocr/base64", bytes.NewReader(jsonBody))
+	if err != nil {
+		return "", fmt.Errorf("创建 OCR 请求失败: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("OCR API 请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("OCR API 返回错误状态码: %d", resp.StatusCode)
+	}
+
+	// 解析响应
+	var result struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Text string `json:"text"`
+		} `json:"data"`
+		Message string `json:"message"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("解析 OCR 响应失败: %w", err)
+	}
+
+	if !result.Success {
+		return "", fmt.Errorf("OCR 识别失败: %s", result.Message)
+	}
+
+	return result.Data.Text, nil
+}
+
+// LoginError 登录错误类型
+type LoginError struct {
+	Type    string // "captcha" 或 "password"
+	Message string
+}
+
+func (e *LoginError) Error() string {
+	return e.Message
+}
+
+// IsCaptchaError 判断是否为验证码错误
+func IsCaptchaError(err error) bool {
+	var loginErr *LoginError
+	if errors.As(err, &loginErr) {
+		return loginErr.Type == "captcha"
+	}
+	return false
+}
+
+// IsPasswordError 判断是否为密码错误
+func IsPasswordError(err error) bool {
+	var loginErr *LoginError
+	if errors.As(err, &loginErr) {
+		return loginErr.Type == "password"
+	}
+	return false
+}
+
 // ValidateSession 验证当前 Cookie 是否仍然有效
-// 通过访问教务系统主页并检测响应页面是否包含 URLSuccessMark 来判断
+// 通过访问教务系统主页并检测响应页面是否包含 SuccessMark 来判断
 func (c *Client) ValidateSession(ctx context.Context) bool {
-	req, err := http.NewRequestWithContext(ctx, "GET", URLMainPage, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", MainPageURL, nil)
 	if err != nil {
 		return false
 	}
@@ -48,11 +146,11 @@ func (c *Client) ValidateSession(ctx context.Context) bool {
 		return false
 	}
 
-	return strings.Contains(string(bodyBytes), URLSuccessMark)
+	return strings.Contains(string(bodyBytes), SuccessMark)
 }
 
 // LoginWithCache 优先使用缓存的 session 登录，失败后回退到完整登录流程
-func (c *Client) LoginWithCache(ctx context.Context, username, password string) error {
+func (c *Client) LoginWithCache(ctx context.Context, username, password string, ocrClient OCRClient) error {
 	// 1. 尝试加载本地 session
 	if c.LoadSession() {
 		log.Println("[INFO] 正在验证缓存的会话...")
@@ -66,7 +164,7 @@ func (c *Client) LoginWithCache(ctx context.Context, username, password string) 
 	}
 
 	// 2. 执行完整登录
-	if err := c.Login(ctx, username, password); err != nil {
+	if err := c.Login(ctx, username, password, ocrClient); err != nil {
 		return err
 	}
 
@@ -78,208 +176,203 @@ func (c *Client) LoginWithCache(ctx context.Context, username, password string) 
 	return nil
 }
 
-// Login 执行完整的 CAS 登录流程
-func (c *Client) Login(ctx context.Context, username, password string) error {
-	// 0. 检查是否需要验证码
-	if err := c.checkNeedCaptcha(ctx, username); err != nil {
+// Login 执行强智教务系统的登录流程
+func (c *Client) Login(ctx context.Context, username, password string, ocrClient OCRClient) error {
+	// 1. 访问首页获取初始 Cookie
+	if err := c.visitIndex(ctx); err != nil {
 		return err
 	}
 
-	loginPageURL := fmt.Sprintf("%s?service=%s", URLLogin, url.QueryEscape(URLService))
+	// 2. 登录循环（最多重试 MaxCaptchaRetries 次）
+	var lastErr error
+	for attempt := 1; attempt <= MaxCaptchaRetries; attempt++ {
+		log.Printf("[INFO] 登录尝试 %d/%d", attempt, MaxCaptchaRetries)
 
-	// 1. 获取 salt 和 execution
-	salt, execution, err := c.fetchLoginParams(ctx, loginPageURL)
-	if err != nil {
-		return err
-	}
-
-	// 2. 加密密码
-	encPassword, err := auth.EncryptPassword(password, salt)
-	if err != nil {
-		return fmt.Errorf("密码加密失败: %w", err)
-	}
-
-	// 3. 提交登录表单并获取 ticket 重定向链接
-	ticketURL, err := c.submitForm(ctx, loginPageURL, username, encPassword, execution)
-	if err != nil {
-		return err
-	}
-
-	// 4. 完成 SSO 认证流程
-	if err := c.completeSSO(ctx, ticketURL); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// checkNeedCaptcha 检查账号是否需要验证码
-func (c *Client) checkNeedCaptcha(ctx context.Context, username string) error {
-	timestamp := time.Now().UnixMilli()
-	checkURL := fmt.Sprintf("https://ids.qfnu.edu.cn/authserver/checkNeedCaptcha.htl?username=%s&_=%d", username, timestamp)
-
-	req, err := http.NewRequestWithContext(ctx, "GET", checkURL, nil)
-	if err != nil {
-		return fmt.Errorf("创建验证码检查请求失败: %w", err)
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("检查验证码状态失败: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("验证码检查接口异常: %d", resp.StatusCode)
-	}
-
-	var result struct {
-		IsNeed bool `json:"isNeed"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return fmt.Errorf("解析验证码检查响应失败: %w", err)
-	}
-
-	if result.IsNeed {
-		return errors.New("当前账号需输入验证码，请先在浏览器手动登录一次以消除验证状态")
-	}
-
-	return nil
-}
-
-// fetchLoginParams 获取登录页面所需的动态参数
-func (c *Client) fetchLoginParams(ctx context.Context, url string) (salt, execution string, err error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return "", "", err
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return "", "", fmt.Errorf("访问登录页失败: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("访问登录页异常: %d", resp.StatusCode)
-	}
-
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
-	if err != nil {
-		return "", "", fmt.Errorf("解析 HTML 失败: %w", err)
-	}
-
-	salt, _ = doc.Find("#pwdEncryptSalt").Attr("value")
-	execution, _ = doc.Find("#execution").Attr("value")
-
-	if salt == "" || execution == "" {
-		return "", "", errors.New("无法获取 salt 或 execution，页面结构可能已变更")
-	}
-
-	return salt, execution, nil
-}
-
-// submitForm 提交表单，返回携带 ticket 的 URL
-func (c *Client) submitForm(ctx context.Context, loginURL, username, encPassword, execution string) (*url.URL, error) {
-	formData := url.Values{
-		"username":  {username},
-		"password":  {encPassword},
-		"_eventId":  {"submit"},
-		"cllt":      {"userNameLogin"},
-		"dllt":      {"generalLogin"},
-		"lt":        {""},
-		"execution": {execution},
-	}
-
-	// 创建一个不自动重定向的 Client，用于捕获 302 跳转中的 Ticket
-	// 注意：这里复用 c.httpClient 的 CookieJar，以保持会话
-	noRedirectClient := &http.Client{
-		Jar:     c.httpClient.Jar,
-		Timeout: c.httpClient.Timeout,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", loginURL, strings.NewReader(formData.Encode()))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-
-	resp, err := noRedirectClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("提交登录表单失败: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// 检查是否重定向
-	if resp.StatusCode == http.StatusFound || resp.StatusCode == http.StatusMovedPermanently {
-		ticketURL, err := resp.Location()
-		if err != nil {
-			return nil, fmt.Errorf("获取重定向地址失败: %w", err)
+		err := c.loginAttempt(ctx, username, password, ocrClient)
+		if err == nil {
+			// 登录成功
+			return nil
 		}
-		return ticketURL, nil
+
+		lastErr = err
+
+		// 如果是密码错误，直接返回，不需要重试
+		if IsPasswordError(err) {
+			return err
+		}
+
+		// 如果是验证码错误，继续重试
+		if IsCaptchaError(err) {
+			log.Printf("[WARN] 验证码错误，准备重试")
+			// 短暂延迟后重试
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+
+		// 其他错误直接返回
+		return err
 	}
 
-	// 如果没有重定向，说明登录失败（可能在当前页面显示错误信息）
-	bodyBytes, _ := io.ReadAll(resp.Body)
-	bodyStr := string(bodyBytes)
-
-	if strings.Contains(bodyStr, "您提供的用户名或者密码有误") {
-		return nil, errors.New("账号或密码错误")
-	}
-	if strings.Contains(bodyStr, "验证码") || strings.Contains(bodyStr, "captcha") {
-		return nil, errors.New("系统检测到异常，需要验证码 (需人工介入)")
-	}
-
-	return nil, fmt.Errorf("登录未成功，状态码: %d", resp.StatusCode)
+	return fmt.Errorf("登录失败，已达到最大重试次数: %w", lastErr)
 }
 
-// completeSSO 完成后续的 SSO 跳转和验证
-func (c *Client) completeSSO(ctx context.Context, ticketURL *url.URL) error {
-	// 1. 访问 Ticket URL
-	if err := c.simpleGet(ctx, ticketURL.String()); err != nil {
-		return fmt.Errorf("Ticket 验证失败: %w", err)
+// visitIndex 访问首页获取初始 Cookie
+func (c *Client) visitIndex(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, "GET", IndexURL, nil)
+	if err != nil {
+		return fmt.Errorf("创建首页请求失败: %w", err)
 	}
 
-	// 2. 访问 sso.jsp (确保 Cookie 写入)
-	if err := c.simpleGet(ctx, URLService); err != nil {
-		return fmt.Errorf("SSO 初始化失败: %w", err)
+	// 设置浏览器请求头
+	c.setBrowserHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("访问首页失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("访问首页异常: %d", resp.StatusCode)
 	}
 
-	// 3. 访问主页验证最终结果
-	req, err := http.NewRequestWithContext(ctx, "GET", URLMainPage, nil)
+	log.Println("[INFO] 已访问首页，获取初始 Cookie")
+	return nil
+}
+
+// loginAttempt 执行一次登录尝试
+func (c *Client) loginAttempt(ctx context.Context, username, password string, ocrClient OCRClient) error {
+	// 1. 获取验证码图片
+	captchaData, err := c.getCaptcha(ctx)
 	if err != nil {
 		return err
 	}
+
+	// 2. 识别验证码
+	captchaText, err := ocrClient.Recognize(captchaData)
+	if err != nil {
+		return fmt.Errorf("验证码识别失败: %w", err)
+	}
+	log.Printf("[DEBUG] 验证码识别结果: %s", captchaText)
+
+	// 3. 生成 encoded 字符串
+	encoded := generateEncoded(username, password)
+
+	// 4. 提交登录请求
+	respBody, err := c.submitLogin(ctx, captchaText, encoded)
+	if err != nil {
+		return err
+	}
+
+	// 5. 判断登录结果
+	return c.checkLoginResult(respBody)
+}
+
+// getCaptcha 获取验证码图片
+func (c *Client) getCaptcha(ctx context.Context) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", CaptchaURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("创建验证码请求失败: %w", err)
+	}
+
+	c.setBrowserHeaders(req)
+
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("访问主页失败: %w", err)
+		return nil, fmt.Errorf("获取验证码失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("获取验证码异常: %d", resp.StatusCode)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("读取验证码数据失败: %w", err)
+	}
+
+	log.Println("[INFO] 已获取验证码图片")
+	return data, nil
+}
+
+// generateEncoded 生成 encoded 字符串
+// 格式: Base64(用户名) + "%%%" + Base64(密码)
+func generateEncoded(username, password string) string {
+	usernameBase64 := base64.StdEncoding.EncodeToString([]byte(username))
+	passwordBase64 := base64.StdEncoding.EncodeToString([]byte(password))
+	return usernameBase64 + "%%%" + passwordBase64
+}
+
+// submitLogin 提交登录请求
+func (c *Client) submitLogin(ctx context.Context, captchaText, encoded string) (string, error) {
+	// 构建表单数据
+	formData := url.Values{
+		"userAccount":   {""},
+		"userPassword":  {""},
+		"RANDOMCODE":    {captchaText},
+		"encoded":       {encoded},
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", LoginURL, strings.NewReader(formData.Encode()))
+	if err != nil {
+		return "", fmt.Errorf("创建登录请求失败: %w", err)
+	}
+
+	// 设置请求头
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "http://zhjw.qfnu.edu.cn")
+	req.Header.Set("Referer", "http://zhjw.qfnu.edu.cn/")
+	c.setBrowserHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("提交登录请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("读取登录响应失败: %w", err)
+	}
+
+	return string(bodyBytes), nil
+}
+
+// checkLoginResult 检查登录结果
+func (c *Client) checkLoginResult(respBody string) error {
+	if strings.Contains(respBody, "验证码错误") {
+		return &LoginError{Type: "captcha", Message: "验证码错误"}
+	}
+	if strings.Contains(respBody, "密码错误") {
+		return &LoginError{Type: "password", Message: "用户名或密码错误"}
+	}
+
+	// 验证登录状态
+	req, err := http.NewRequestWithContext(context.Background(), "GET", MainPageURL, nil)
+	if err != nil {
+		return fmt.Errorf("创建验证请求失败: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("验证登录状态失败: %w", err)
 	}
 	defer resp.Body.Close()
 
 	bodyBytes, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(bodyBytes), URLSuccessMark) {
+	if !strings.Contains(string(bodyBytes), SuccessMark) {
 		return errors.New("登录流程结束，但未检测到登录成功标识")
-	} else {
-		log.Println("检测到登录成功标识，登录流程完成。")
 	}
 
+	log.Println("[INFO] 检测到登录成功标识，登录流程完成")
 	return nil
 }
 
-func (c *Client) simpleGet(ctx context.Context, urlStr string) error {
-	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
-	if err != nil {
-		return err
-	}
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	resp.Body.Close()
-	return nil
+// setBrowserHeaders 设置浏览器请求头
+func (c *Client) setBrowserHeaders(req *http.Request) {
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+	req.Header.Set("Connection", "keep-alive")
 }
