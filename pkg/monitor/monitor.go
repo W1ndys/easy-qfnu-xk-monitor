@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/W1ndys/easy-qfnu-xk-monitor/pkg/cas"
@@ -130,19 +131,43 @@ func (m *Monitor) runRound(ctx context.Context) {
 }
 
 func (m *Monitor) queryCurrentCourses(ctx context.Context) (map[string]jwxt.CourseInfo, error) {
-	current := make(map[string]jwxt.CourseInfo)
-	for _, keyword := range m.config.CourseList {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
-		}
+	type result struct {
+		courses []jwxt.CourseInfo
+		err     error
+		keyword string
+	}
 
-		courses, err := jwxt.SearchAllModules(ctx, m.client, keyword)
-		if err != nil {
-			return nil, fmt.Errorf("课程[%s]搜索失败: %w", keyword, err)
+	resultCh := make(chan result, len(m.config.CourseList))
+	var wg sync.WaitGroup
+
+	// 启动并发搜索
+	for _, keyword := range m.config.CourseList {
+		wg.Add(1)
+		go func(kw string) {
+			defer wg.Done()
+
+			courses, err := jwxt.SearchAllModules(ctx, m.client, kw)
+			resultCh <- result{
+				courses: courses,
+				err:     err,
+				keyword: kw,
+			}
+		}(keyword)
+	}
+
+	// 等待所有搜索完成后关闭 channel
+	go func() {
+		wg.Wait()
+		close(resultCh)
+	}()
+
+	// 收集结果
+	current := make(map[string]jwxt.CourseInfo)
+	for res := range resultCh {
+		if res.err != nil {
+			return nil, fmt.Errorf("课程[%s]搜索失败: %w", res.keyword, res.err)
 		}
-		for _, course := range courses {
+		for _, course := range res.courses {
 			key := course.UniqueKey()
 			if key == "_" {
 				continue
@@ -150,6 +175,7 @@ func (m *Monitor) queryCurrentCourses(ctx context.Context) (map[string]jwxt.Cour
 			current[key] = course
 		}
 	}
+
 	return current, nil
 }
 
