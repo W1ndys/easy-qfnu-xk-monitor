@@ -254,6 +254,11 @@ func (m *Monitor) reloginWithRetry(ctx context.Context) error {
 			}
 			roundID, err := jwxt.GetSelectionRoundID(ctx, m.casClient.GetClient())
 			if err != nil {
+				if jwxt.IsSelectionRoundNotFound(err) {
+					m.client = m.casClient.GetClient()
+					log.Printf("[WARN] 会话恢复成功，但未找到可用选课轮次，跳过轮次进入并继续搜索: %v", err)
+					return nil
+				}
 				log.Printf("[ERROR] 重新获取轮次失败: %v", err)
 			} else if err := jwxt.EnterSelectionRound(ctx, m.casClient.GetClient(), roundID); err != nil {
 				log.Printf("[ERROR] 重新进入轮次失败: %v", err)

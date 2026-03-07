@@ -63,12 +63,17 @@ func main() {
 
 	roundID, err := jwxt.GetSelectionRoundID(ctx, casClient.GetClient())
 	if err != nil {
-		log.Fatalf("[ERROR] 获取选课轮次失败: %v", err)
+		if jwxt.IsSelectionRoundNotFound(err) {
+			log.Printf("[WARN] 未找到可用选课轮次，跳过轮次进入并直接执行搜索: %v", err)
+		} else {
+			log.Fatalf("[ERROR] 获取选课轮次失败: %v", err)
+		}
+	} else {
+		if err := jwxt.EnterSelectionRound(ctx, casClient.GetClient(), roundID); err != nil {
+			log.Fatalf("[ERROR] 进入选课轮次失败: %v", err)
+		}
+		log.Printf("[INFO] 已进入选课轮次: %s", roundID)
 	}
-	if err := jwxt.EnterSelectionRound(ctx, casClient.GetClient(), roundID); err != nil {
-		log.Fatalf("[ERROR] 进入选课轮次失败: %v", err)
-	}
-	log.Printf("[INFO] 已进入选课轮次: %s", roundID)
 
 	notifier := notify.NewNotifier(
 		cfg.OneBotURL,
