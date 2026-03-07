@@ -2,6 +2,7 @@ package jwxt
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,6 +19,8 @@ const (
 	RoundIndexPath  = "/jsxsd/xsxk/xsxk_index"
 	roundQueryParam = "jx0502zbid"
 )
+
+var ErrSelectionRoundNotFound = errors.New("未找到可进入的选课轮次")
 
 // SelectionRound 表示页面中的一个选课轮次。
 type SelectionRound struct {
@@ -38,7 +41,7 @@ func GetSelectionRoundID(ctx context.Context, client *http.Client) (string, erro
 		return "", err
 	}
 	if len(rounds) == 0 {
-		return "", fmt.Errorf("未在轮次页面中找到可进入的选课链接")
+		return "", fmt.Errorf("%w: 轮次列表为空", ErrSelectionRoundNotFound)
 	}
 	return rounds[0].ID, nil
 }
@@ -52,7 +55,7 @@ func GetSelectionRounds(ctx context.Context, client *http.Client) ([]SelectionRo
 
 	table := doc.Find("#tbKxkc").First()
 	if table.Length() == 0 {
-		return nil, fmt.Errorf("未找到轮次表格: #tbKxkc")
+		return nil, fmt.Errorf("%w: 未找到轮次表格 #tbKxkc", ErrSelectionRoundNotFound)
 	}
 
 	rounds := make([]SelectionRound, 0)
@@ -98,9 +101,13 @@ func GetSelectionRounds(ctx context.Context, client *http.Client) ([]SelectionRo
 	})
 
 	if len(rounds) == 0 {
-		return nil, fmt.Errorf("未在 #tbKxkc 中解析到 %s", roundQueryParam)
+		return nil, fmt.Errorf("%w: 未在 #tbKxkc 中解析到 %s", ErrSelectionRoundNotFound, roundQueryParam)
 	}
 	return rounds, nil
+}
+
+func IsSelectionRoundNotFound(err error) bool {
+	return errors.Is(err, ErrSelectionRoundNotFound)
 }
 
 // EnterSelectionRound 进入指定轮次并激活选课上下文。
