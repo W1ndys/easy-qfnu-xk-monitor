@@ -97,14 +97,14 @@ func (n *Notifier) BroadcastMessage(message string) error {
 	return allErr
 }
 
-// FormatCoursesMessage 将新增课程列表格式化为推送文本。
+// FormatCoursesMessage 将余量增加课程列表格式化为推送文本。
 func FormatCoursesMessage(courses []jwxt.CourseInfo) string {
 	if len(courses) == 0 {
-		return "【选课监控】本轮没有新增课程。"
+		return "【选课监控】本轮没有余量增加的课程。"
 	}
 
 	var b strings.Builder
-	b.WriteString("【选课监控】发现新课程！\n")
+	b.WriteString("【选课监控】检测到课程余量增加！\n")
 	for i, course := range courses {
 		if i > 0 {
 			b.WriteString("\n")
