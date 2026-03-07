@@ -9,7 +9,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,7 +26,9 @@ const (
 	defaultSnapshotPath = "data/last_result.json"
 )
 
-// Monitor 负责轮询课程、检测新增并推送消息。
+var remainingSeatNumberPattern = regexp.MustCompile(`-?\d+`)
+
+// Monitor 负责轮询课程、检测余量增加并推送消息。
 type Monitor struct {
 	casClient    *cas.Client
 	client       *http.Client
@@ -103,7 +108,7 @@ func (m *Monitor) runRound(ctx context.Context) {
 		return
 	}
 
-	added := m.diffAdded(current)
+	increased := m.diffRemainingIncreased(current)
 	if !m.hasBaseline {
 		m.lastResult = current
 		m.hasBaseline = true
@@ -114,12 +119,12 @@ func (m *Monitor) runRound(ctx context.Context) {
 		return
 	}
 
-	if len(added) > 0 {
-		message := notify.FormatCoursesMessage(added)
+	if len(increased) > 0 {
+		message := notify.FormatCoursesMessage(increased)
 		if err := m.notifier.BroadcastMessage(message); err != nil {
-			log.Printf("[ERROR] 新增课程推送失败: %v", err)
+			log.Printf("[ERROR] 余量增加课程推送失败: %v", err)
 		} else {
-			log.Printf("[INFO] 已推送新增课程: %d 条", len(added))
+			log.Printf("[INFO] 已推送余量增加课程: %d 条", len(increased))
 		}
 	}
 
@@ -127,7 +132,7 @@ func (m *Monitor) runRound(ctx context.Context) {
 	if err := m.saveSnapshot(current); err != nil {
 		log.Printf("[WARN] 保存快照失败: %v", err)
 	}
-	log.Printf("[INFO] 本轮完成: 总课程=%d, 新增=%d, 耗时=%s", len(current), len(added), time.Since(startedAt))
+	log.Printf("[INFO] 本轮完成: 总课程=%d, 余量增加=%d, 耗时=%s", len(current), len(increased), time.Since(startedAt))
 }
 
 func (m *Monitor) queryCurrentCourses(ctx context.Context) (map[string]jwxt.CourseInfo, error) {
@@ -179,18 +184,55 @@ func (m *Monitor) queryCurrentCourses(ctx context.Context) (map[string]jwxt.Cour
 	return current, nil
 }
 
-func (m *Monitor) diffAdded(current map[string]jwxt.CourseInfo) []jwxt.CourseInfo {
-	added := make([]jwxt.CourseInfo, 0)
+func (m *Monitor) diffRemainingIncreased(current map[string]jwxt.CourseInfo) []jwxt.CourseInfo {
+	increased := make([]jwxt.CourseInfo, 0)
 	for key, course := range current {
-		if _, exists := m.lastResult[key]; !exists {
-			added = append(added, course)
+		lastCourse, exists := m.lastResult[key]
+		if !exists {
+			// 忽略“从无到有”的课程，仅关注同一课程余量变化。
+			continue
+		}
+
+		currentRemaining, okCurrent := parseRemainingSeats(course.Syrs)
+		lastRemaining, okLast := parseRemainingSeats(lastCourse.Syrs)
+		if !okCurrent || !okLast {
+			continue
+		}
+		if currentRemaining > lastRemaining {
+			increased = append(increased, course)
 		}
 	}
 
-	sort.Slice(added, func(i, j int) bool {
-		return added[i].UniqueKey() < added[j].UniqueKey()
+	sort.Slice(increased, func(i, j int) bool {
+		return increased[i].UniqueKey() < increased[j].UniqueKey()
 	})
-	return added
+	return increased
+}
+
+func parseRemainingSeats(value string) (int, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, false
+	}
+
+	if n, err := strconv.Atoi(value); err == nil {
+		return n, true
+	}
+
+	if strings.Contains(value, "满") || strings.Contains(value, "无") {
+		return 0, true
+	}
+
+	raw := remainingSeatNumberPattern.FindString(value)
+	if raw == "" {
+		return 0, false
+	}
+
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }
 
 func (m *Monitor) reloginWithRetry(ctx context.Context) error {
